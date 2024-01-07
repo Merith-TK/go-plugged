@@ -1,41 +1,42 @@
-import { Injector, Logger } from "replugged";
+import { Logger } from "replugged";
 
-const inject = new Injector();
+interface CustomWindow extends Window {
+  Go?: typeof Go;
+}
+
+declare const window: CustomWindow;
+
 const logger = Logger.plugin("go-plugged");
+
+const wasmExecScript = document.createElement("script");
+wasmExecScript.onloadstart = () => logger.log("Loading wasm_exec.js");
+wasmExecScript.onerror = () => logger.log("wasm_exec.js failed to load");
 
 // const wasmRemote = "http://localhost/main.wasm";
 const wasmRemote = "https://merith.xyz/main.wasm";
 const wasmExecRemote = "https://merith.xyz/wasm_exec.js";
 
-export async function start(): Promise<void> {
-  // Fetch wasmExecRemote and load it into the HTML body
-  console.log("Fetching wasm_exec.js...");
-  const wasmExecResponse = await fetch(wasmExecRemote);
-  const wasmExecCode = await wasmExecResponse.text();
-  document.body.innerHTML += wasmExecCode;
+export const start = (): void => {
+  wasmExecScript.onload = async () => {
+    if (window.Go) {
+      const go = new window.Go();
 
-  console.log("wasm_exec.js loaded");
-  // Check if the Go object is defined
-  if (typeof Go == "undefined") {
-    console.log("Failed to inject wasm_exec.js");
-    return;
-  } else {
-    console.log("wasm_exec.js was injected successfully");
+      const wasmModule = await fetch(wasmRemote)
+        .then(async (res) => WebAssembly.instantiate(await res.arrayBuffer(), go.importObject))
+        .catch((e) => logger.error("Error occurred while instantiating wasmModule", e));
 
-    const go = new Go();
+      if (wasmModule) {
+        logger.log("wasmModule:", wasmModule.instance.exports.run);
+        void go.run(wasmModule.instance);
+      }
+    }
+  };
 
-    // Fetch wasmRemote and load it as wasm code
-    const wasmResponse = await fetch(wasmRemote);
-    const wasmBuffer = await wasmResponse.arrayBuffer();
-    const wasmModule = await WebAssembly.instantiate(wasmBuffer, go.importObject);
+  // the script tag begins downloading as soon as its src is set
+  // so we won't be able to catch errors or wait for it - we have to set it here
+  wasmExecScript.src = wasmExecRemote;
 
-    console.log("wasmModule:", wasmModule.instance.exports.run);
+  document.head.appendChild(wasmExecScript);
+};
 
-    // Run the wasm code
-    go.run(wasmModule.instance);
-  }
-}
-
-export function stop(): void {
-  inject.uninjectAll();
-}
+export const stop = (): void => wasmExecScript.remove();
